@@ -1,0 +1,98 @@
+name: Build NextJS and Publish Release
+
+# Run only when PR merged into main
+on:
+  pull_request:
+    branches:
+      - develop
+    types:
+      - closed
+
+concurrency:
+  group: release-main
+  cancel-in-progress: true
+
+jobs:
+  build-release:
+    # only if merged (not just closed)
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+
+    steps:
+      # =========================
+      # Checkout current repo
+      # =========================
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # =========================
+      # Setup Node
+      # =========================
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # =========================
+      # Install dependencies
+      # =========================
+      - name: Install dependencies
+        run: npm ci
+
+      # =========================
+      # Build NextJS
+      # =========================
+      - name: Build app
+        run: npm run build
+
+      # =========================
+      # Create zip package
+      # =========================
+      - name: Create zip
+        run: |
+          mkdir release
+          cp -r .next release/
+          cp -r public release/
+          cp package.json release/
+          cd release
+          zip -r nextjs-build.zip .
+
+      # =========================
+      # Generate version
+      # =========================
+      - name: Generate version
+        id: version
+        run: |
+          VERSION="v$(date +'%Y.%m.%d').${{ github.run_number }}"
+          echo "tag=$VERSION" >> $GITHUB_OUTPUT
+
+      # =========================
+      # Publish release
+      # =========================
+      - name: Publish Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Release ${{ steps.version.outputs.tag }}
+          files: release/nextjs-build.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # =========================
+      # Cleanup old releases
+      # =========================
+      - name: Cleanup old releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release list \
+            --limit 100 \
+            --json tagName \
+            -q '.[].tagName' \
+          | tail -n +5 \
+          | while read tag; do
+              gh release delete "$tag" --yes --cleanup-tag
+            done
