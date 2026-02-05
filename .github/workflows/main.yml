@@ -1,6 +1,6 @@
 name: Build NextJS and Publish Release
 
-# Run only when PR merged into main
+# Trigger ONLY when PR merged into develop
 on:
   pull_request:
     branches:
@@ -8,19 +8,23 @@ on:
     types:
       - closed
 
+# REQUIRED for creating releases (fixes 403)
+permissions:
+  contents: write
+
 concurrency:
-  group: release-main
+  group: nextjs-release
   cancel-in-progress: true
 
 jobs:
   build-release:
-    # only if merged (not just closed)
+    # run only if PR was merged (not just closed)
     if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
 
     steps:
       # =========================
-      # Checkout current repo
+      # Checkout repo
       # =========================
       - name: Checkout code
         uses: actions/checkout@v4
@@ -28,7 +32,7 @@ jobs:
           fetch-depth: 0
 
       # =========================
-      # Setup Node
+      # Setup Node + cache
       # =========================
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -49,9 +53,17 @@ jobs:
         run: npm run build
 
       # =========================
-      # Create zip package
+      # Install required tools
       # =========================
-      - name: Create zip
+      - name: Install zip & gh
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zip gh
+
+      # =========================
+      # Package build
+      # =========================
+      - name: Create zip package
         run: |
           mkdir release
           cp -r .next release/
@@ -62,6 +74,7 @@ jobs:
 
       # =========================
       # Generate version
+      # Example: v2026.02.05.4
       # =========================
       - name: Generate version
         id: version
@@ -70,7 +83,7 @@ jobs:
           echo "tag=$VERSION" >> $GITHUB_OUTPUT
 
       # =========================
-      # Publish release
+      # Create GitHub Release
       # =========================
       - name: Publish Release
         uses: softprops/action-gh-release@v2
@@ -79,20 +92,15 @@ jobs:
           name: Release ${{ steps.version.outputs.tag }}
           files: release/nextjs-build.zip
         env:
-          GITHUB_TOKEN: ${{ secrets.BUILD_TOKEN  }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # =========================
-      # Cleanup old releases
+      # Cleanup old releases (keep last 4)
       # =========================
       - name: Cleanup old releases
         env:
-          GH_TOKEN: ${{ secrets.BUILD_TOKEN  }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release list \
-            --limit 100 \
-            --json tagName \
-            -q '.[].tagName' \
+          gh release list --limit 100 --json tagName -q '.[].tagName' \
           | tail -n +5 \
-          | while read tag; do
-              gh release delete "$tag" --yes --cleanup-tag
-            done
+          | xargs -I {} gh release delete {} --yes --cleanup-tag
